@@ -6,18 +6,15 @@ echo ========================================
 echo     Запуск транслятора GoydaScript
 echo ========================================
 echo.
-
-:: Запрос имени скрипта
+
 set /p script_name=Введите название скрипта: 
-
-:: Проверка, что имя скрипта не пустое
+
 if "!script_name!"=="" (
     echo Ошибка: Имя скрипта не может быть пустым!
     pause
     exit /b 1
 )
-
-:: Запрос режима отладки
+
 echo.
 echo Выберите режим отладки:
 echo  [n] - Нет
@@ -26,8 +23,7 @@ echo  [f] - Полная (full)
 echo.
 
 set /p debug_mode=Ваш выбор (n/s/f): 
-
-:: Установка параметра отладки
+
 set debug_param=
 
 if /i "!debug_mode!"=="s" (
@@ -47,18 +43,8 @@ if /i "!debug_mode!"=="s" (
 echo.
 echo Запуск: python GoydaScript/goyda2py.py !script_name! !debug_param!
 echo.
-
-:: Запуск Python скрипта
+
 python GoydaScript/goyda2py.py %script_name% %debug_param%
-
-:: Проверка результата выполнения
-if errorlevel 1 (
-    echo.
-    echo Ошибка при выполнении скрипта!
-) else (
-    echo.
-    echo Скрипт успешно выполнен!
-)
-
+
 echo.
 pause
