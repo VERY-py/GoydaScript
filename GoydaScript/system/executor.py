@@ -1,228 +1,283 @@
 from typing import Dict, Any, Optional
 
+
 class Executor:
     def __init__(self, debug: bool = False):
         self.debug = debug
         self.variables: Dict[str, Any] = {}
-        self.return_value: Optional[int] = None
+        self.functions: Dict[str, Dict] = {}
+        self.return_value: Optional[Any] = None
         self.prints_found = 0
         self.returns_found = 0
         self.ifs_found = 0
         self.loops_found = 0
+        self.call_stack = []
 
-    def execute(self, statements: list) -> Optional[int]:
+    def execute(self, statements: list, functions: Dict = None) -> Optional[Any]:
+        if functions:
+            self.functions = functions
+
         self.return_value = None
+        self.call_stack = [{'vars': self.variables.copy()}]
 
         for stmt in statements:
             if self.return_value is not None:
                 break
-
-            if stmt['type'] == 'decl':
-                self._execute_decl(stmt)
-            elif stmt['type'] == 'list_decl':
-                self._execute_list_decl(stmt)
-            elif stmt['type'] == 'for_loop':
-                self._execute_for_loop(stmt)
-            elif stmt['type'] == 'method_call':
-                self._execute_method_call(stmt)
-            elif stmt['type'] == 'print':
-                self._execute_print(stmt)
-            elif stmt['type'] == 'return':
-                self._execute_return(stmt)
-            elif stmt['type'] == 'if_chain':
-                self._execute_if_chain(stmt)
-            elif stmt['type'] == 'assign_get':
-                self._execute_assign_get(stmt)
+            self._execute_statement(stmt)
 
         return self.return_value
 
-    def _execute_for_loop(self, stmt: Dict):
-        """Выполняет цикл for с поддержкой range и списков"""
+    def _execute_statement(self, stmt: Dict):
+        if stmt['type'] == 'decl':
+            self._execute_decl(stmt)
+        elif stmt['type'] == 'for_loop':
+            self._execute_for_loop(stmt)
+        elif stmt['type'] == 'while_loop':
+            self._execute_while_loop(stmt)
+        elif stmt['type'] == 'function_call':
+            self._execute_function_call(stmt)
+        elif stmt['type'] == 'print':
+            self._execute_print(stmt)
+        elif stmt['type'] == 'return':
+            self._execute_return(stmt)
+        elif stmt['type'] == 'if_chain':
+            self._execute_if_chain(stmt)
+        elif stmt['type'] == 'assign_op':
+            self._execute_assign_op(stmt)
+
+    def _execute_function_call(self, stmt: Dict) -> Any:
+        """Выполняет вызов функции и возвращает результат"""
+        func_name = stmt['name']
+
+        if func_name not in self.functions:
+            raise Exception(f"Функция '{func_name}' не определена")
+
+        func = self.functions[func_name]
+        args = [self._evaluate_expression(arg) for arg in stmt['args']]
+
+        if len(args) != len(func['params']):
+            raise Exception(f"Функция '{func_name}' ожидает {len(func['params'])} аргументов, получено {len(args)}")
+
+        old_vars = self.variables.copy()
+        old_return = self.return_value
+
+        self.variables = {}
+        for param_name, arg_value in zip(func['params'], args):
+            self.variables[param_name] = arg_value
+
+        result = None
+        self.return_value = None
+
+        for statement in func['body']:
+            self._execute_statement(statement)
+            if self.return_value is not None:
+                result = self.return_value
+                break
+
+        self.variables = old_vars
+        self.return_value = old_return
+
+        return result if result is not None else 0
+
+    def _execute_while_loop(self, stmt: Dict):
+        """Выполняет цикл while"""
         self.loops_found += 1
 
-        # Получаем итератор (список)
-        iterator = None
+        max_iterations = 10000
+        iterations = 0
 
-        if stmt['iterator']['type'] == 'list_ref':
-            # Ссылка на существующий список
-            list_name = stmt['iterator']['value']
-            if list_name in self.variables and isinstance(self.variables[list_name], list):
-                iterator = self.variables[list_name]
-        elif stmt['iterator']['type'] == 'list_literal':
-            # Литерал списка
-            iterator = stmt['iterator']['value']
-        elif stmt['iterator']['type'] == 'range':
-            # Range объект - вычисляем значения
-            range_data = stmt['iterator']
-
-            if range_data.get('is_constant', False):
-                # Константный range
-                start = range_data['start']
-                end = range_data['end']
-                iterator = list(range(start, end))
-            else:
-                # Range с переменными
-                # Определяем start
-                if 'start_var' in range_data:
-                    var_name = range_data['start_var']
-                    if var_name in self.variables and isinstance(self.variables[var_name], int):
-                        start = self.variables[var_name]
-                    else:
-                        start = 0
-                else:
-                    start = range_data.get('start', 0)
-
-                # Определяем end
-                if 'end_var' in range_data:
-                    var_name = range_data['end_var']
-                    if var_name in self.variables and isinstance(self.variables[var_name], int):
-                        end = self.variables[var_name]
-                    else:
-                        end = 0
-                else:
-                    end = range_data.get('end', 0)
-
-                iterator = list(range(start, end))
-
-        if not isinstance(iterator, list):
-            return
-
-        # Для каждого элемента выполняем блок
-        for element_value in iterator:
-            # Временно сохраняем элемент в переменную
-            self.variables[stmt['element']] = element_value
+        while self._evaluate_expression(stmt['condition']) and iterations < max_iterations:
+            iterations += 1
             self._execute_block(stmt['block'])
-
-            # Если был return, прерываем цикл
             if self.return_value is not None:
                 break
 
-    def _execute_list_decl(self, stmt: Dict):
-        """Создает новый список из литерала или range"""
-        if stmt['source']['type'] == 'literal':
-            self.variables[stmt['name']] = stmt['source']['values'].copy()
-        elif stmt['source']['type'] == 'range':
-            range_data = stmt['source']
+    def _evaluate_expression(self, expr: Dict) -> Any:
+        if not expr:
+            return None
 
-            if range_data.get('is_constant', False):
-                # Константный range
-                start = range_data['start']
-                end = range_data['end']
-                self.variables[stmt['name']] = list(range(start, end))
+        expr_type = expr['type']
+
+        if expr_type in ['int', 'float', 'str', 'bool']:
+            return expr['value']
+
+        elif expr_type == 'variable':
+            return self.variables.get(expr['name'], None)
+
+        elif expr_type == 'function_call':
+            return self._execute_function_call(expr)
+
+        elif expr_type == 'list_literal':
+            return [self._evaluate_expression(e) for e in expr['elements']]
+
+        elif expr_type == 'dict_literal':
+            result = {}
+            for pair in expr['pairs']:
+                key = self._evaluate_expression(pair['key'])
+                value = self._evaluate_expression(pair['value'])
+                if isinstance(key, (int, float, str, bool, tuple)):
+                    result[key] = value
+            return result
+
+        elif expr_type == 'range':
+            args = [self._evaluate_expression(arg) for arg in expr['args']]
+            if len(args) == 1:
+                return list(range(int(args[0])))
             else:
-                # Range с переменными
-                # Определяем start
-                if 'start_var' in range_data:
-                    var_name = range_data['start_var']
-                    if var_name in self.variables and isinstance(self.variables[var_name], int):
-                        start = self.variables[var_name]
-                    else:
-                        start = 0
-                else:
-                    start = range_data.get('start', 0)
+                return list(range(int(args[0]), int(args[1])))
 
-                # Определяем end
-                if 'end_var' in range_data:
-                    var_name = range_data['end_var']
-                    if var_name in self.variables and isinstance(self.variables[var_name], int):
-                        end = self.variables[var_name]
-                    else:
-                        end = 0
-                else:
-                    end = range_data.get('end', 0)
+        elif expr_type == 'unary_op':
+            value = self._evaluate_expression(expr['expr'])
+            if expr['op'] == 'not':
+                return not value
+            elif expr['op'] == '-':
+                return -value
 
-                self.variables[stmt['name']] = list(range(start, end))
+        elif expr_type == 'binary_op':
+            left = self._evaluate_expression(expr['left'])
+            right = self._evaluate_expression(expr['right'])
+            op = expr['op']
+
+            if op == '+':
+                if isinstance(left, str) or isinstance(right, str):
+                    return str(left) + str(right)
+                return left + right
+            elif op == '-':
+                return left - right
+            elif op == '*':
+                return left * right
+            elif op == '/':
+                return left / right
+            elif op == '//':
+                return left // right
+            elif op == '%':
+                return left % right
+            elif op == '**':
+                return left ** right
+            elif op == '==':
+                return left == right
+            elif op == '!=':
+                return left != right
+            elif op == '>':
+                return left > right
+            elif op == '<':
+                return left < right
+            elif op == '>=':
+                return left >= right
+            elif op == '<=':
+                return left <= right
+            elif op == 'is':
+                return left is right
+            elif op == 'and':
+                return left and right
+            elif op == 'or':
+                return left or right
+
+        return None
 
     def _execute_block(self, block: list):
-        """Выполняет блок инструкций"""
         for stmt in block:
             if self.return_value is not None:
                 break
+            self._execute_statement(stmt)
 
-            if stmt['type'] == 'assign':
-                self.variables[stmt['name']] = stmt['value']
-            elif stmt['type'] == 'method_call':
-                self._execute_method_call(stmt)
-            elif stmt['type'] == 'print':
-                self._execute_print(stmt)
-            elif stmt['type'] == 'return':
-                self._execute_return(stmt)
-            elif stmt['type'] == 'for_loop':
-                self._execute_for_loop(stmt)
+    def _execute_assign_op(self, stmt: Dict):
+        if stmt['name'] not in self.variables:
+            self.variables[stmt['name']] = 0
 
-    def _execute_method_call(self, stmt: Dict):
-        """Выполняет вызов метода"""
-        if stmt['object'] not in self.variables:
-            return
+        current = self.variables[stmt['name']]
+        value = self._evaluate_expression(stmt['value'])
+        op = stmt['op']
 
-        obj = self.variables[stmt['object']]
-
-        if stmt['method'] == 'append':
-            if isinstance(obj, list) and len(stmt['args']) > 0:
-                obj.append(stmt['args'][0])
-
-        elif stmt['method'] == 'get':
-            # get обрабатывается в assign_get
-            pass
-
-    def _execute_assign_get(self, stmt: Dict):
-        """Выполняет присваивание результата метода get"""
-        if stmt['method_call']['object'] not in self.variables:
-            return
-
-        obj = self.variables[stmt['method_call']['object']]
-        args = stmt['method_call']['args']
-
-        if isinstance(obj, list) and len(args) > 0:
-            index = args[0]
-            if 0 <= index < len(obj):
-                self.variables[stmt['name']] = obj[index]
+        if op == '=':
+            self.variables[stmt['name']] = value
+        elif op == '+=':
+            self.variables[stmt['name']] = current + value
+        elif op == '-=':
+            self.variables[stmt['name']] = current - value
+        elif op == '*=':
+            self.variables[stmt['name']] = current * value
+        elif op == '/=':
+            self.variables[stmt['name']] = current / value
+        elif op == '//=':
+            self.variables[stmt['name']] = current // value
+        elif op == '%=':
+            self.variables[stmt['name']] = current % value
+        elif op == '**=':
+            self.variables[stmt['name']] = current ** value
 
     def _execute_decl(self, stmt: Dict):
-        """Выполняет объявление переменной"""
         if stmt['is_input']:
             prompt = stmt['prompt']
-            if prompt:
-                value = input(prompt + " ")
+            value = input(prompt + " ") if prompt else input("Ввод: ")
+
+            if stmt['var_type'] == 'int':
+                try:
+                    value = int(value)
+                except:
+                    value = 0
+            elif stmt['var_type'] == 'float':
+                try:
+                    value = float(value)
+                except:
+                    value = 0.0
+            elif stmt['var_type'] == 'bool':
+                value = value.lower() in ['true', '1', 'yes', 'да']
             else:
-                value = input("Ввод: ")
-            try:
-                value = int(value)
-            except:
-                value = 0
+                value = str(value)
+
             self.variables[stmt['name']] = value
         else:
-            self.variables[stmt['name']] = stmt['value']
+            value = self._evaluate_expression(stmt['value']) if stmt['value'] else None
+            self.variables[stmt['name']] = value
 
     def _execute_print(self, stmt: Dict):
-        """Выполняет print"""
         self.prints_found += 1
-        if stmt['var'] in self.variables:
-            print(self.variables[stmt['var']])
+        if stmt['value']:
+            value = self._evaluate_expression(stmt['value'])
+            print(value)
         else:
-            print(0)
+            print()
 
     def _execute_return(self, stmt: Dict):
         """Выполняет return"""
         self.returns_found += 1
-        self.return_value = stmt['value']
+        if stmt['value']:
+            self.return_value = self._evaluate_expression(stmt['value'])
+        else:
+            self.return_value = None
 
     def _execute_if_chain(self, stmt: Dict):
-        """Выполняет цепочку if/else if/else"""
         self.ifs_found += 1
         executed = False
 
         for condition in stmt['conditions']:
             if condition['type'] in ['if', 'else_if']:
-                if not executed and self._check_condition(condition['condition']):
-                    self._execute_block(condition['block'])
-                    executed = True
+                if not executed:
+                    cond_value = self._evaluate_expression(condition['condition'])
+                    if cond_value:
+                        self._execute_block(condition['block'])
+                        executed = True
             elif condition['type'] == 'else' and not executed:
                 self._execute_block(condition['block'])
                 executed = True
 
-    def _check_condition(self, condition: Dict) -> bool:
-        """Проверяет условие"""
-        if condition['left'] in self.variables:
-            return self.variables[condition['left']] == condition['right']
-        return False
+    def _execute_for_loop(self, stmt: Dict):
+        self.loops_found += 1
+
+        iterator = None
+        if stmt['iterator']['type'] == 'iter_ref':
+            list_name = stmt['iterator']['value']
+            if list_name in self.variables:
+                iterator = self.variables[list_name]
+        else:
+            iterator = self._evaluate_expression(stmt['iterator'])
+
+        if not isinstance(iterator, (list, tuple, range)):
+            return
+
+        for element_value in iterator:
+            self.variables[stmt['element']] = element_value
+            self._execute_block(stmt['block'])
+            if self.return_value is not None:
+                break
