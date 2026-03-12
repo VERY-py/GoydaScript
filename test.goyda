@@ -1,7 +1,0 @@
-func main() {
-int a = input("Введите число: ");
-
-for f in range(a) {print(f);}
-
-return 1;
-}
