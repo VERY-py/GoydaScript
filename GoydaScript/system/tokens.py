@@ -64,6 +64,9 @@ class TokenType(Enum):
     DOT = "."
     COLON = ":"
     ARROW = "->"
+    TRY = "TRY"
+    EXCEPT = "EXCEPT"
+    AS = "AS"
 
 class Token:
     def __init__(self, type_: TokenType, value: str = ""):

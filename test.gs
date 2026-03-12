@@ -1,49 +1,39 @@
-# Функция для вычисления факториала
-func factorial(n) {
-    if n <= 1 {
-        return 1;
-    }
-    return n * factorial(n - 1);
-}
+int result = 0;
 
-# Функция для вычисления чисел Фибоначчи
-func fibonacci(n) {
-    if n <= 1 {
-        return n;
-    }
-    return fibonacci(n - 1) + fibonacci(n - 2);
-}
-
-# Функция с несколькими параметрами
-func power(base, exp) {
-    int result = 1;
-    int i = 0;
-    while i < exp {
-        result = result * base;
-        i += 1;
-    }
-    return result;
+func printD() {
+    print();
+    print("1. Сложение (a + b)");
+    print("2. Вычитание (a - b)");
+    print("3. Умножение (a * b)");
+    print("4. Деление (a / b)");
+    print("5. Степень (a ** b)");
+    print("6. Цел. деление (a // b)");
+    print("7. Остаток от деления (a % b)");
+    print();
 }
 
 func main() {
-    # Вызов функций
-    int fact5 = factorial(5);
-    print("Факториал 5 = " + fact5);
+    print("Калькулятор");
+    int n1 = input("Введи первое число (a):");
+    int n2 = input("Введи второе число (b):");
+    printD();
+    int t = input("Выберите действие:");
 
-    int fib7 = fibonacci(7);
-    print("Число Фибоначчи(7) = " + fib7);
-
-    int pow2_10 = power(2, 10);
-    print("2 в степени 10 = " + pow2_10);
-
-    # Демонстрация while
-    int counter = 5;
-    print("Обратный отсчет:");
-    while counter > 0 {
-        print(counter);
-        counter -= 1;
+    try {
+        if t == 1 {result = n1 + n2;}
+        else if t == 2 {result = n1 - n2;}
+        else if t == 3 {result = n1 * n2;}
+        else if t == 4 {result = n1 / n2;}
+        else if t == 5 {result = n1 ** n2;}
+        else if t == 6 {result = n1 // n2;}
+        else if t == 7 {result = n1 % n2;}
     }
-    print("Старт!");
+    except as e {
+        print("Произошла ошибка: " + e);
+    }
+
+    print();
+    print("Ответ: " + result);
 
     return 0;
 }

@@ -21,76 +21,88 @@ class Compiler:
             return f.read()
 
     def compile(self, filepath: str):
-        if self.debug == 'full':
-            print(">>> ЗАПУСК КОМПИЛЯТОРА GoydaScript <<<")
-            print("=" * 60)
+        try:
+            if self.debug == 'full':
+                print(">>> ЗАПУСК КОМПИЛЯТОРА GoydaScript <<<")
+                print("=" * 60)
 
-        if self.debug == 'full':
-            print("[1/4] Загрузка файла...")
+            # Этап 1: Загрузка файла
+            if self.debug == 'full':
+                print("[1/4] Загрузка файла...")
 
-        code = self._load_file(filepath)
+            code = self._load_file(filepath)
 
-        if self.debug == 'full':
-            print(f"  - Файл загружен: {len(code)} символов\n")
+            if self.debug == 'full':
+                print(f"  - Файл загружен: {len(code)} символов\n")
 
-        if self.debug == 'full':
-            print("[2/4] Лексический анализ...")
+            # Этап 2: Лексический анализ
+            if self.debug == 'full':
+                print("[2/4] Лексический анализ...")
 
-        start = time.time()
-        lexer = Lexer(code)
-        tokens = lexer.get_tokens()
-        self.lexer_time = time.time() - start
+            start = time.time()
+            lexer = Lexer(code)
+            tokens = lexer.get_tokens()
+            self.lexer_time = time.time() - start
 
-        if self.debug == 'full':
-            print(f"  - Найдено токенов: {len(tokens)}\n")
+            if self.debug == 'full':
+                print(f"  - Найдено токенов: {len(tokens)}\n")
 
-        # Этап 3: Парсинг
-        if self.debug == 'full':
-            print("[3/4] Компиляция в AST...")
+            # Этап 3: Парсинг
+            if self.debug == 'full':
+                print("[3/4] Компиляция в AST...")
 
-        start = time.time()
-        parser = Parser(debug=self.debug)
-        ast = parser.parse(tokens)
-        self.parser_time = time.time() - start
+            start = time.time()
+            parser = Parser(debug=self.debug, source_code=code)  # передаем исходный код
+            ast = parser.parse(tokens)
+            self.parser_time = time.time() - start
 
-        if parser.error_occurred:
-            print(f"!!! ОШИБКА КОМПИЛЯЦИИ: {parser.error_message}")
+            if parser.error_occurred:
+                print("\n!<>! СИНТАКСИЧЕСКАЯ ОШИБКА !<>!")
+                print(f"Ошибка: {parser.error_message}")
+                if hasattr(parser, 'error_line'):
+                    print(f"Строка: {parser.error_line}")
+                print("\nПрограмма не может быть выполнена из-за ошибки в коде.")
+                sys.exit(1)
+
+            # Этап 4: Выполнение программы
+            if self.debug == 'small':
+                print("--- ВЫВОД ПРОГРАММЫ ---")
+                print("-" * 40)
+            elif self.debug == 'full':
+                print("=" * 60)
+                print(">>> ВЫПОЛНЕНИЕ ПРОГРАММЫ <<<")
+                print("=" * 60 + "\n")
+
+            start = time.time()
+            executor = Executor(debug=self.debug == 'full')
+            return_value = executor.execute(ast, parser.functions)
+            self.executor_time = time.time() - start
+
+            if self.debug == 'small':
+                print("-" * 40)
+            elif self.debug == 'full':
+                print("\n" + "=" * 60)
+                print(">>> ВЫПОЛНЕНИЕ ЗАВЕРШЕНО <<<")
+                print("=" * 60 + "\n")
+
+            total_time = time.time() - self.start_time
+            self._show_results(executor, tokens, ast, total_time, return_value)
+
+        except KeyboardInterrupt:
+            print("\n\n!<>! Прерывание пользователем !<>!")
+            sys.exit(-1)
+        except Exception as e:
+            print(f"\n!<>! КРИТИЧЕСКАЯ ОШИБКА !<>!")
+            print(e)
+            if self.debug == 'full':
+                import traceback
+                traceback.print_exc()
             sys.exit(1)
 
-        if self.debug == 'full':
-            print(f"  - AST построено: {len(ast)} узлов")
-            print(f"  - Найдено функций: {len(parser.functions)}\n")
-
-        # Этап 4: Выполнение программы
-        if self.debug == 'small':
-            print("--- ВЫВОД ПРОГРАММЫ ---")
-            print("-" * 40)
-        elif self.debug == 'full':
-            print("=" * 60)
-            print(">>> ВЫПОЛНЕНИЕ ПРОГРАММЫ <<<")
-            print("=" * 60 + "\n")
-
-        start = time.time()
-        executor = Executor(debug=self.debug == 'full')
-        return_value = executor.execute(ast, parser.functions)
-        self.executor_time = time.time() - start
-
-        if self.debug == 'small':
-            print("-" * 40)
-        elif self.debug == 'full':
-            print("\n" + "=" * 60)
-            print(">>> ВЫПОЛНЕНИЕ ЗАВЕРШЕНО <<<")
-            print("=" * 60 + "\n")
-
-        total_time = time.time() - self.start_time
-        self._show_results(executor, tokens, ast, total_time, return_value)
 
     def _show_results(self, executor: Executor, tokens: list, ast: list, total_time: float,
                       return_value: Optional[int]):
         exit_code = return_value if return_value is not None else 1
-
-        print("")
-        print(f"-> exit code: {exit_code}")
 
         if self.debug == 'small':
             print(f"-> Время: {total_time:.3f}с | Токенов: {len(tokens)} | {len(tokens) / total_time:.0f} ток/с")

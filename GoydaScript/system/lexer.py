@@ -152,7 +152,10 @@ class Lexer:
             'and': TokenType.AND,
             'or': TokenType.OR,
             'not': TokenType.NOT,
-            'is': TokenType.IS
+            'is': TokenType.IS,
+            'try': TokenType.TRY,
+            'except': TokenType.EXCEPT,
+            'as': TokenType.AS
         }
         token_type = keywords.get(word, TokenType.ID)
         self.tokens.append(Token(token_type, word))

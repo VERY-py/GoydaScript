@@ -2,12 +2,15 @@ from typing import Dict, Optional
 from .tokens import Token, TokenType
 
 class Parser:
-    def __init__(self, debug: str = None):
+    def __init__(self, debug: str = None, source_code: str = ""):
         self.debug = debug
+        self.source_code = source_code
+        self.source_lines = source_code.split('\n') if source_code else []
         self.functions: Dict[str, Dict] = {}
         self.statements = []
         self.error_occurred = False
         self.error_message = ""
+        self.error_line = 0
 
     def parse(self, tokens: list[Token]) -> list:
         if self.debug == 'full':
@@ -17,47 +20,96 @@ class Parser:
 
         self.statements = []
         self.functions = {}
+        self.global_statements = []
         self.pos = 0
         self.tokens = tokens
-        main_body = []
+        self.error_occurred = False
+        self.error_message = ""
 
         try:
-            while self.pos < len(self.tokens):
-                if self.tokens[self.pos].type == TokenType.FUNC:
-                    if (self.pos + 1 < len(self.tokens) and
-                            self.tokens[self.pos + 1].type == TokenType.MAIN):
-                        self.pos += 2
-
-                        if self.pos < len(self.tokens) and self.tokens[self.pos].type == TokenType.LPAREN:
-                            while self.pos < len(self.tokens) and self.tokens[self.pos].type != TokenType.RPAREN:
-                                self.pos += 1
-                            self.pos += 1
-
-                        main_body = self._parse_block()
-                        break
-                    else:
-                        func_def = self._parse_function_definition()
-                        if func_def:
-                            self.functions[func_def['name']] = func_def
+            while self.pos < len(self.tokens) and self.tokens[self.pos].type != TokenType.FUNC:
+                token = self.tokens[self.pos]
+                if token.type in [TokenType.INT, TokenType.FLOAT, TokenType.STR,
+                                  TokenType.BOOL, TokenType.LIST, TokenType.TUPLE, TokenType.DICT]:
+                    stmt = self._parse_decl_stmt(token.type)
+                    if stmt and not self.error_occurred:
+                        self.global_statements.append(stmt)
                 else:
                     self.pos += 1
 
-            if not main_body:
+            while self.pos < len(self.tokens) and not self.error_occurred:
+                if self.tokens[self.pos].type == TokenType.FUNC:
+                    func_def = self._parse_function_definition()
+                    if func_def and not self.error_occurred:
+                        self.functions[func_def['name']] = func_def
+                else:
+                    self.pos += 1
+
+            if self.error_occurred:
+                return []
+
+            if 'main' not in self.functions:
                 self.error_occurred = True
                 self.error_message = "Функция main не найдена"
                 return []
 
-            return main_body
+            result = self.global_statements.copy()
+            result.append({
+                'type': 'function_call',
+                'name': 'main',
+                'args': []
+            })
+
+            return result
 
         except Exception as e:
             self.error_occurred = True
             self.error_message = f"Ошибка парсинга: {str(e)}"
             return []
 
+
+    def _parse_try_except(self) -> Optional[Dict]:
+        """Парсит блок try-except: try { блок } except as e { блок }"""
+        self.pos += 1
+
+        try_block = self._parse_block()
+
+        if self.pos >= len(self.tokens) or self.tokens[self.pos].type != TokenType.EXCEPT:
+            self.error_occurred = True
+            self.error_message = "Ожидался блок except после try"
+            return None
+
+        self.pos += 1
+
+        if self.pos >= len(self.tokens) or self.tokens[self.pos].type != TokenType.AS:
+            self.error_occurred = True
+            self.error_message = "Ожидалось 'as' после except"
+            return None
+
+        self.pos += 1
+
+        if self.pos >= len(self.tokens) or self.tokens[self.pos].type != TokenType.ID:
+            self.error_occurred = True
+            self.error_message = "Ожидалось имя переменной для ошибки после as"
+            return None
+
+        error_var = self.tokens[self.pos].value
+        self.pos += 1
+
+        except_block = self._parse_block()
+
+        return {
+            'type': 'try_except',
+            'try_block': try_block,
+            'error_var': error_var,
+            'except_block': except_block
+        }
+
     def _parse_function_definition(self) -> Optional[Dict]:
         """Парсит определение функции: func name(params) { body }"""
         if self.debug == 'full':
             print(f"DEBUG: парсим функцию на позиции {self.pos}, токен: {self.tokens[self.pos].type}")
+
         start_pos = self.pos
         self.pos += 1
 
@@ -67,7 +119,6 @@ class Parser:
             return None
 
         if self.tokens[self.pos].type not in [TokenType.ID, TokenType.MAIN]:
-            print(f"DEBUG: ошибка - ожидался ID или MAIN, но получен {self.tokens[self.pos].type}")
             self.error_occurred = True
             self.error_message = "Ожидалось имя функции после func"
             return None
@@ -88,8 +139,14 @@ class Parser:
                     self.pos += 1
             if self.pos < len(self.tokens) and self.tokens[self.pos].type == TokenType.RPAREN:
                 self.pos += 1
+            else:
+                self.error_occurred = True
+                self.error_message = f"Ожидалась ')' после параметров функции {func_name}"
+                return None
 
         body = self._parse_block()
+        if self.error_occurred:
+            return None
 
         return {
             'name': func_name,
@@ -211,6 +268,7 @@ class Parser:
                 self.tokens[self.pos + 1].type == TokenType.LPAREN):
 
             func_name = self.tokens[self.pos].value
+            call_token = self.tokens[self.pos]
             self.pos += 2
 
             args = []
@@ -225,11 +283,16 @@ class Parser:
 
             if self.pos < len(self.tokens) and self.tokens[self.pos].type == TokenType.RPAREN:
                 self.pos += 1
+            else:
+                self.error_occurred = True
+                self.error_message = f"Ожидалась ')' после вызова функции {func_name}"
+                return None
 
             return {
                 'type': 'function_call',
                 'name': func_name,
-                'args': args
+                'args': args,
+                '_token': call_token
             }
 
         return self._parse_primary_expression()
@@ -375,6 +438,7 @@ class Parser:
         }
 
         var_type = type_map[type_token]
+        start_pos = self.pos
         self.pos += 1
 
         if self.pos >= len(self.tokens) or self.tokens[self.pos].type != TokenType.ID:
@@ -416,7 +480,13 @@ class Parser:
                 if expr:
                     stmt['value'] = expr
 
-        self._skip_to_semi()
+        if self.pos < len(self.tokens) and self.tokens[self.pos].type == TokenType.SEMI:
+            self.pos += 1
+        else:
+            self.error_occurred = True
+            self.error_message = f"Отсутствует точка с запятой ';' после объявления переменной {var_name}"
+            return None
+
         return stmt
 
     def _parse_while_loop(self) -> Optional[Dict]:
@@ -470,20 +540,24 @@ class Parser:
         return stmt
 
     def _parse_print_stmt(self) -> Optional[Dict]:
+        if self.debug == 'full':print(f"DEBUG: _parse_print_stmt на позиции {self.pos}, токен: {self.tokens[self.pos].type}")
         self.pos += 1
 
         if self.pos < len(self.tokens) and self.tokens[self.pos].type == TokenType.LPAREN:
+            if self.debug == 'full':print(f"DEBUG: Найдена ( на позиции {self.pos}")
             self.pos += 1
 
         stmt = {'type': 'print', 'value': None}
         expr = self._parse_expression()
         if expr:
             stmt['value'] = expr
+            if self.debug == 'full':print(f"DEBUG: Найдено выражение для print")
 
         if self.pos < len(self.tokens) and self.tokens[self.pos].type == TokenType.RPAREN:
+            if self.debug == 'full':print(f"DEBUG: Найдена ) на позиции {self.pos}")
             self.pos += 1
 
-        self._skip_to_semi()
+        if self.debug == 'full':print(f"DEBUG: _parse_print_stmt завершен на позиции {self.pos}")
         return stmt
 
     def _parse_return_stmt(self) -> Optional[Dict]:
@@ -496,10 +570,15 @@ class Parser:
         return stmt
 
     def _parse_if_stmt(self) -> Optional[Dict]:
-        stmt = {'type': 'if_chain', 'conditions': []}
+        stmt = {
+            'type': 'if_chain',
+            'conditions': [],
+            'positions': []
+        }
 
         while self.pos < len(self.tokens):
             current_token = self.tokens[self.pos]
+            condition_pos = self.pos
 
             if current_token.type == TokenType.IF:
                 self.pos += 1
@@ -510,6 +589,7 @@ class Parser:
                     'condition': condition,
                     'block': block
                 })
+                stmt['positions'].append(condition_pos)
 
             elif current_token.type == TokenType.ELSE:
                 self.pos += 1
@@ -522,9 +602,11 @@ class Parser:
                         'condition': condition,
                         'block': block
                     })
+                    stmt['positions'].append(condition_pos)
                 else:
                     block = self._parse_block()
                     stmt['conditions'].append({'type': 'else', 'block': block})
+                    stmt['positions'].append(condition_pos)
                     break
             else:
                 break
@@ -532,16 +614,24 @@ class Parser:
         return stmt
 
     def _parse_block(self) -> list:
+        if self.debug == 'full':
+            print(f"DEBUG: _parse_block вызывается на позиции {self.pos}")
+
         while self.pos < len(self.tokens) and self.tokens[self.pos].type != TokenType.LBRACE:
             self.pos += 1
 
         if self.pos < len(self.tokens):
+            if self.debug == 'full':
+                print(f"DEBUG: Начало блока на позиции {self.pos}, токен: {self.tokens[self.pos].type}")
             self.pos += 1
 
         block_statements = []
 
         while self.pos < len(self.tokens) and self.tokens[self.pos].type != TokenType.RBRACE:
             token = self.tokens[self.pos]
+            last_token_pos = self.pos
+            if self.debug == 'full':
+                print(f"DEBUG: Обработка токена в блоке: {token.type} = '{token.value}' на позиции {self.pos}")
 
             if token.type in [TokenType.INT, TokenType.FLOAT, TokenType.STR, TokenType.BOOL,
                               TokenType.LIST, TokenType.TUPLE, TokenType.DICT]:
@@ -550,8 +640,48 @@ class Parser:
                     block_statements.append(stmt)
                 continue
 
+            elif token.type == TokenType.TRY:
+                stmt = self._parse_try_except()
+                if stmt:
+                    block_statements.append(stmt)
+                continue
+
             elif token.type == TokenType.WHILE:
                 stmt = self._parse_while_loop()
+                if stmt:
+                    block_statements.append(stmt)
+                continue
+
+            elif token.type == TokenType.FOR:
+                stmt = self._parse_for_loop()
+                if stmt:
+                    block_statements.append(stmt)
+                continue
+
+            elif token.type == TokenType.IF:
+                if_pos = self.pos
+                stmt = self._parse_if_stmt()
+                if stmt:
+                    block_statements.append(stmt)
+                continue
+
+            elif token.type == TokenType.PRINT:
+                stmt = self._parse_print_stmt()
+                if stmt:
+                    block_statements.append(stmt)
+                if self.pos < len(self.tokens) and self.tokens[self.pos].type == TokenType.SEMI:
+                    if self.debug == 'full':
+                        print(f"DEBUG: Найдена точка с запятой после print на позиции {self.pos}")
+                    self.pos += 1
+                else:
+                    error_msg = "Отсутствует точка с запятой ';' после print"
+                    line_num = self._get_line_from_pos(last_token_pos)
+                    self._report_error(error_msg, line_num, token)
+                    return []
+                continue
+
+            elif token.type == TokenType.RETURN:
+                stmt = self._parse_return_stmt()
                 if stmt:
                     block_statements.append(stmt)
                 continue
@@ -569,10 +699,10 @@ class Parser:
                         TokenType.MOD_ASSIGN: '%=',
                         TokenType.POW_ASSIGN: '**='
                     }
-
                     if next_token.type in assign_ops:
                         var_name = token.value
                         op = assign_ops[next_token.type]
+                        assign_pos = self.pos
                         self.pos += 2
                         expr = self._parse_expression()
                         if expr:
@@ -580,54 +710,126 @@ class Parser:
                                 'type': 'assign_op',
                                 'name': var_name,
                                 'op': op,
-                                'value': expr
+                                'value': expr,
+                                'pos': assign_pos
                             })
+                        if self.pos < len(self.tokens) and self.tokens[self.pos].type == TokenType.SEMI:
+                            if self.debug == 'full':
+                                print(f"DEBUG: Найдена точка с запятой после присваивания на позиции {self.pos}")
+                            self.pos += 1
+                        else:
+                            error_msg = f"Отсутствует точка с запятой ';' после присваивания переменной {var_name}"
+                            line_num = self._get_line_from_pos(assign_pos)
+                            self._report_error(error_msg, line_num, token)
+                            return []
                         continue
 
                 call_expr = self._parse_call_expression()
                 if call_expr and call_expr['type'] == 'function_call':
+                    call_pos = last_token_pos
+                    call_expr['pos'] = call_pos
                     block_statements.append(call_expr)
+
+                    if self.pos < len(self.tokens) and self.tokens[self.pos].type == TokenType.SEMI:
+                        if self.debug == 'full':
+                            print(f"DEBUG: Найдена точка с запятой после вызова функции на позиции {self.pos}")
+                        self.pos += 1
+                    else:
+                        error_msg = f"Отсутствует точка с запятой ';' после вызова функции {call_expr['name']}()"
+                        line_num = self._get_line_from_pos(call_pos)
+                        self._report_error(error_msg, line_num, call_expr.get('_token', token))
+                        return []
+                    continue
                 else:
                     self.pos += 1
-
-            elif token.type == TokenType.PRINT:
-                stmt = self._parse_print_stmt()
-                if stmt:
-                    block_statements.append(stmt)
-                continue
-
-            elif token.type == TokenType.RETURN:
-                stmt = self._parse_return_stmt()
-                if stmt:
-                    block_statements.append(stmt)
-                continue
-
-            elif token.type == TokenType.FOR:
-                stmt = self._parse_for_loop()
-                if stmt:
-                    block_statements.append(stmt)
-                continue
-
-            elif token.type == TokenType.IF:
-                stmt = self._parse_if_stmt()
-                if stmt:
-                    block_statements.append(stmt)
-                continue
 
             else:
                 self.pos += 1
 
-            if self.pos < len(self.tokens) and self.tokens[self.pos].type == TokenType.SEMI:
-                self.pos += 1
+            if self.debug == 'full':
+                print(f"DEBUG: После обработки, позиция {self.pos}")
+
+        if self.debug == 'full':
+            print(f"DEBUG: Конец блока на позиции {self.pos}")
 
         if self.pos < len(self.tokens) and self.tokens[self.pos].type == TokenType.RBRACE:
+            if self.debug == 'full':
+                print(f"DEBUG: Найдена закрывающая скобка на позиции {self.pos}")
             self.pos += 1
 
         return block_statements
 
+    def _report_error(self, message: str, line_num: int, token: Token = None):
+        """Вспомогательный метод для вывода ошибок"""
+        error_msg = message
+        if line_num > 0:
+            error_msg += f" (строка {line_num})"
+            if line_num <= len(self.source_lines):
+                line_content = self.source_lines[line_num - 1]
+                error_msg += f"\n  {line_content}"
+                if token:
+                    token_pos = line_content.find(token.value)
+                    if token_pos >= 0:
+                        error_msg += f"\n  {' ' * token_pos}{'^' * len(token.value)}"
+
+        self.error_occurred = True
+        self.error_message = error_msg
+        self.error_line = line_num
+
     def _skip_to_semi(self):
         while (self.pos < len(self.tokens) and
                self.tokens[self.pos].type != TokenType.SEMI):
+            if self.tokens[self.pos].type == TokenType.RBRACE:
+                error_token_pos = self.pos - 1
+                prev_token = self.tokens[error_token_pos] if error_token_pos >= 0 else None
+                error_msg = "Отсутствует точка с запятой ';'"
+                line_num = 0
+
+                if prev_token:
+                    error_msg += f" после '{prev_token.value}'"
+                    line_num = self._get_line_from_pos(error_token_pos)
+
+                if line_num > 0:
+                    error_msg += f" (строка {line_num})"
+
+                    if line_num <= len(self.source_lines):
+                        line_content = self.source_lines[line_num - 1]
+                        error_msg += f"\n  {line_content}"
+
+                        if prev_token:
+                            token_pos = line_content.find(prev_token.value)
+                            if token_pos >= 0:
+                                error_msg += f"\n  {' ' * token_pos}{'^' * len(prev_token.value)}"
+
+                self.error_occurred = True
+                self.error_message = error_msg
+                self.error_line = line_num
+                return
             self.pos += 1
+
         if self.pos < len(self.tokens) and self.tokens[self.pos].type == TokenType.SEMI:
             self.pos += 1
+
+    def _get_line_from_pos(self, token_pos: int) -> int:
+        """Возвращает номер строки для токена по его позиции"""
+        if not self.source_code or token_pos < 0 or token_pos >= len(self.tokens):
+            return 0
+
+        token = self.tokens[token_pos]
+        lines = self.source_code.split('\n')
+
+        for i, line in enumerate(lines):
+            if token.value in line:
+                if '#' in line:
+                    comment_pos = line.find('#')
+                    token_pos_in_line = line.find(token.value)
+                    if token_pos_in_line > comment_pos:
+                        continue
+
+                words = line.replace('(', ' ').replace(')', ' ').replace('{', ' ').replace('}', ' ').replace(';',
+                                                                                                             ' ').replace(
+                    '=', ' ').split()
+                if token.value in words:
+                    return i + 1
+
+        return 0

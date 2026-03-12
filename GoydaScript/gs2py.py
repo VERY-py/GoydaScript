@@ -1,43 +1,35 @@
 import sys
+import os
 import argparse
+
+script_dir = os.path.dirname(os.path.abspath(__file__))
+if script_dir not in sys.path:
+    sys.path.insert(0, script_dir)
+
 from system.compiler import Compiler
 
-class ProgressBar:
-    """Простая шкала прогресса"""
-
-    def __init__(self, total: int, width: int = 40):
-        self.total = total
-        self.width = width
-        self.current = 0
-
-    def update(self, current: int):
-        self.current = min(current, self.total)
-        percent = (self.current / self.total) * 100
-        filled = int(self.width * self.current // self.total)
-        bar = '█' * filled + '░' * (self.width - filled)
-        sys.stdout.write(f'\r[{bar}] {percent:6.1f}% ({self.current}/{self.total})')
-        sys.stdout.flush()
-
-    def finish(self, eta: float):
-        self.update(self.total)
-        print(f'\r[{'█' * self.width}] 100.0% ✓ (ETA: {eta:.2f}s)')
-
-
-def main():
-    parser = argparse.ArgumentParser(description="Goyda Language Compiler")
-    parser.add_argument("file", help="Путь к .gs файлу")
-    parser.add_argument("--debug", "-d", nargs='?', const='small', choices=['small', 'full'],
-                        help="Режим отладки: small (базовая инфо) или full (подробная)")
-    args = parser.parse_args()
+def main(file: str = None, debug: str = None):
+    if file is None:
+        parser = argparse.ArgumentParser(description="Goyda Language Compiler")
+        parser.add_argument("file", help="Путь к .gs файлу")
+        parser.add_argument("--debug", "-d", nargs='?', const='small', choices=['small', 'full'],
+                            help="Режим отладки: small (базовая инфо) или full (подробная)")
+        nargs = parser.parse_args()
+        args = {'file': nargs.file, 'debug': nargs.debug}
+    else:
+        args = {'file': file, 'debug': debug}
 
     try:
-        compiler = Compiler(debug=args.debug)
-        compiler.compile(args.file)
+        compiler = Compiler(debug=args['debug'])
+        compiler.compile(args['file'])
     except KeyboardInterrupt:
-        print("\n\n⛔ Компиляция прервана пользователем")
-        sys.exit(1)
+        print("\n\n✗ Компиляция прервана пользователем")
+        sys.exit(-1)
     except Exception as e:
         print(f"\n✗ Критическая ошибка: {e}")
+        if args['debug'] == 'full':
+            import traceback
+            traceback.print_exc()
         sys.exit(1)
 
 if __name__ == "__main__":
