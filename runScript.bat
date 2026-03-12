@@ -3,7 +3,7 @@ chcp 65001 > nul
 setlocal enabledelayedexpansion
 
 echo ========================================
-echo     Запуск транслятора GoydaScript
+echo     Запуск компилятора GoydaScript
 echo ========================================
 echo.
 
