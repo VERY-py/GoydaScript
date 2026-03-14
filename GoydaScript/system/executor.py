@@ -13,7 +13,10 @@ class Executor:
         self.call_stack = []
         self.error_occurred = False
         self.error_message = ""
-        self.stop_execution = False  # флаг для немедленной остановки
+        self.stop_execution = False
+        self.modules: Dict[str, Dict] = {}  # имя -> {'variables':{}, 'functions':{}}
+        self.loaded_modules: Dict[str, Dict] = {}
+        self.current_dir: str = ""
 
     def execute(self, statements: list, functions: Dict = None) -> Optional[Any]:
         if functions:
@@ -62,6 +65,8 @@ class Executor:
                 self._execute_return(stmt)
             elif stmt['type'] == 'if_chain':
                 self._execute_if_chain(stmt)
+            elif stmt['type'] == 'import':
+                self._execute_import(stmt)
             elif stmt['type'] == 'assign_op':
                 self._execute_assign_op(stmt)
             elif stmt['type'] == 'try_except':
@@ -71,7 +76,50 @@ class Executor:
             self.error_message = str(e)
             self.stop_execution = True
             print(f"\n!!! ОШИБКА: {e}")
-            raise  # пробрасываем для немедленной остановки
+            raise
+
+    def _execute_import(self, stmt: Dict):
+        import os
+        path = stmt['path']
+        if not os.path.isabs(path):
+            full_path = os.path.join(self.current_dir, path)
+        else:
+            full_path = path
+        full_path = os.path.normpath(full_path)
+        module_name = os.path.splitext(os.path.basename(path))[0]
+
+        if full_path in self.loaded_modules:
+            self.modules[module_name] = self.loaded_modules[full_path]
+            return
+
+        if not os.path.exists(full_path):
+            raise Exception(f"Файл импорта не найден: {full_path}")
+
+        with open(full_path, 'r', encoding='utf-8') as f:
+            code = f.read()
+
+        from .lexer import Lexer
+        lexer = Lexer(code)
+        tokens = lexer.get_tokens()
+
+        from .parser import Parser
+        parser = Parser(source_code=code)
+        global_stmts, functions = parser.parse_module(tokens)
+        if parser.error_occurred:
+            raise Exception(f"Ошибка в модуле {path}: {parser.error_message}")
+
+        mod_exec = Executor(debug=False)
+        mod_exec.loaded_modules = self.loaded_modules
+        mod_exec.current_dir = os.path.dirname(full_path)
+        mod_exec.functions = functions
+        mod_exec.execute(global_stmts, functions)
+
+        module_data = {
+            'variables': mod_exec.variables.copy(),
+            'functions': mod_exec.functions.copy()
+        }
+        self.loaded_modules[full_path] = module_data
+        self.modules[module_name] = module_data
 
     def _execute_try_except(self, stmt: Dict):
         """Выполняет блок try-except"""
@@ -137,6 +185,17 @@ class Executor:
 
         elif expr_type == 'list_literal':
             return [self._evaluate_expression(e) for e in expr['elements']]
+
+        elif expr_type == 'module_access':
+            module_name = expr['module']
+            member = expr['member']
+            if module_name not in self.modules:
+                raise Exception(f"Модуль '{module_name}' не импортирован")
+            module = self.modules[module_name]
+            if member in module['variables']:
+                return module['variables'][member]
+            else:
+                raise Exception(f"Переменная '{member}' не найдена в модуле '{module_name}'")
 
         elif expr_type == 'dict_literal':
             result = {}
@@ -212,64 +271,109 @@ class Executor:
         return None
 
     def _execute_function_call(self, stmt: Dict) -> Any:
-        """Выполняет вызов функции и возвращает результат"""
         if self.stop_execution:
             return None
 
-        func_name = stmt['name']
+        if 'module' in stmt:
+            module_name = stmt['module']
+            func_name = stmt['name']
+            if module_name not in self.modules:
+                raise Exception(f"Модуль '{module_name}' не импортирован")
+            module = self.modules[module_name]
+            if func_name not in module['functions']:
+                raise Exception(f"Функция '{func_name}' не найдена в модуле '{module_name}'")
+            func = module['functions'][func_name]
+            args = [self._evaluate_expression(arg) for arg in stmt['args']]
 
-        if func_name not in self.functions:
-            raise Exception(f"Функция '{func_name}' не определена")
+            if len(args) != len(func['params']):
+                raise Exception(f"Функция '{func_name}' ожидает {len(func['params'])} аргументов, получено {len(args)}")
 
-        func = self.functions[func_name]
-        args = [self._evaluate_expression(arg) for arg in stmt['args']]
+            old_vars = self.variables.copy()
+            old_funcs = self.functions.copy()
+            old_return = self.return_value
+            self.return_value = None
 
-        if len(args) != len(func['params']):
-            raise Exception(f"Функция '{func_name}' ожидает {len(func['params'])} аргументов, получено {len(args)}")
+            self.variables = module['variables'].copy()
+            self.functions = module['functions'].copy()
 
-        # Сохраняем текущие переменные
-        global_vars = self.variables.copy()
+            for param_name, arg_value in zip(func['params'], args):
+                self.variables[param_name] = arg_value
 
-        # Создаем локальный контекст
-        local_vars = {}
-        for param_name, arg_value in zip(func['params'], args):
-            local_vars[param_name] = arg_value
+            result = None
+            try:
+                for statement in func['body']:
+                    if self.stop_execution:
+                        break
+                    self._execute_statement(statement)
+                    if self.return_value is not None:
+                        result = self.return_value
+                        break
+            except Exception as e:
+                self.variables = old_vars
+                self.functions = old_funcs
+                self.return_value = old_return
+                raise e
 
-        # Добавляем глобальные переменные в локальный контекст (для чтения)
-        for var_name, var_value in global_vars.items():
-            if var_name not in local_vars:
-                local_vars[var_name] = var_value
+            for var_name, var_value in self.variables.items():
+                if var_name not in func['params'] and var_name in module['variables']:
+                    module['variables'][var_name] = var_value
 
-        self.variables = local_vars
+            self.variables = old_vars
+            self.functions = old_funcs
+            self.return_value = old_return
 
-        result = None
-        old_return = self.return_value
-        self.return_value = None
+            return result if result is not None else 0
+        else:
 
-        try:
-            for statement in func['body']:
-                if self.stop_execution:
-                    break
-                self._execute_statement(statement)
-                if self.return_value is not None:
-                    result = self.return_value
-                    break
-        except Exception as e:
-            # Восстанавливаем переменные перед пробросом ошибки
+            func_name = stmt['name']
+
+            if func_name not in self.functions:
+                raise Exception(f"Функция '{func_name}' не определена")
+
+            func = self.functions[func_name]
+            args = [self._evaluate_expression(arg) for arg in stmt['args']]
+
+            if len(args) != len(func['params']):
+                raise Exception(f"Функция '{func_name}' ожидает {len(func['params'])} аргументов, получено {len(args)}")
+
+            global_vars = self.variables.copy()
+
+            local_vars = {}
+            for param_name, arg_value in zip(func['params'], args):
+                local_vars[param_name] = arg_value
+
+            for var_name, var_value in global_vars.items():
+                if var_name not in local_vars:
+                    local_vars[var_name] = var_value
+
+            self.variables = local_vars
+
+            result = None
+            old_return = self.return_value
+            self.return_value = None
+
+            try:
+                for statement in func['body']:
+                    if self.stop_execution:
+                        break
+                    self._execute_statement(statement)
+                    if self.return_value is not None:
+                        result = self.return_value
+                        break
+            except Exception as e:
+                self.variables = global_vars
+                self.return_value = old_return
+                raise e
+
+            if not self.stop_execution:
+                for var_name, var_value in self.variables.items():
+                    if var_name not in func['params'] and var_name in global_vars:
+                        global_vars[var_name] = var_value
+
             self.variables = global_vars
             self.return_value = old_return
-            raise e
 
-        # Обновляем глобальные переменные (только если не было ошибки)
-        if not self.stop_execution:
-            for var_name, var_value in self.variables.items():
-                if var_name not in func['params'] and var_name in global_vars:
-                    global_vars[var_name] = var_value
-
-        self.variables = global_vars
-        self.return_value = old_return
-
-        return result if result is not None else 0
+            return result if result is not None else 0
 
     def _execute_while_loop(self, stmt: Dict):
         """Выполняет цикл while"""

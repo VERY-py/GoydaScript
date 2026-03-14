@@ -75,6 +75,8 @@ class Compiler:
 
             start = time.time()
             executor = Executor(debug=self.debug == 'full')
+            executor.current_dir = os.path.dirname(os.path.abspath(filepath))
+            executor.loaded_modules = {}
             return_value = executor.execute(ast, parser.functions)
             self.executor_time = time.time() - start
 

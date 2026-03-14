@@ -34,6 +34,10 @@ class Parser:
                     stmt = self._parse_decl_stmt(token.type)
                     if stmt and not self.error_occurred:
                         self.global_statements.append(stmt)
+                elif token.type == TokenType.IMPORT:
+                    stmt = self._parse_import_stmt()
+                    if stmt:
+                        self.global_statements.append(stmt)
                 else:
                     self.pos += 1
 
@@ -67,6 +71,35 @@ class Parser:
             self.error_message = f"Ошибка парсинга: {str(e)}"
             return []
 
+    def parse_module(self, tokens: list[Token]) -> tuple[list, dict]:
+        self.tokens = tokens
+        self.pos = 0
+        self.error_occurred = False
+        self.statements = []
+        self.functions = {}
+        self.global_statements = []
+
+        while self.pos < len(self.tokens) and not self.error_occurred:
+            token = self.tokens[self.pos]
+            if token.type in [TokenType.INT, TokenType.FLOAT, TokenType.STR, TokenType.BOOL,
+                              TokenType.LIST, TokenType.TUPLE, TokenType.DICT]:
+                stmt = self._parse_decl_stmt(token.type)
+                if stmt:
+                    self.global_statements.append(stmt)
+            elif token.type == TokenType.IMPORT:
+                stmt = self._parse_import_stmt()
+                if stmt:
+                    self.global_statements.append(stmt)
+            elif token.type == TokenType.FUNC:
+                func_def = self._parse_function_definition()
+                if func_def:
+                    self.functions[func_def['name']] = func_def
+            else:
+                self.pos += 1
+
+        if self.error_occurred:
+            return [], {}
+        return self.global_statements, self.functions
 
     def _parse_try_except(self) -> Optional[Dict]:
         """Парсит блок try-except: try { блок } except as e { блок }"""
@@ -104,6 +137,37 @@ class Parser:
             'error_var': error_var,
             'except_block': except_block
         }
+
+    def _parse_import_stmt(self) -> Optional[Dict]:
+        """Парсит import <"path">;"""
+        self.pos += 1
+
+        if self.pos >= len(self.tokens) or self.tokens[self.pos].type != TokenType.LT:
+            self.error_occurred = True
+            self.error_message = "Ожидался '<' после import"
+            return None
+        self.pos += 1
+
+        if self.pos >= len(self.tokens) or self.tokens[self.pos].type != TokenType.STRING:
+            self.error_occurred = True
+            self.error_message = "Ожидалась строка с путём внутри < >"
+            return None
+        path = self.tokens[self.pos].value
+        self.pos += 1
+
+        if self.pos >= len(self.tokens) or self.tokens[self.pos].type != TokenType.GT:
+            self.error_occurred = True
+            self.error_message = "Ожидался '>' после пути"
+            return None
+        self.pos += 1
+
+        if self.pos >= len(self.tokens) or self.tokens[self.pos].type != TokenType.SEMI:
+            self.error_occurred = True
+            self.error_message = "Отсутствует точка с запятой ';' после import"
+            return None
+        self.pos += 1
+
+        return {'type': 'import', 'path': path}
 
     def _parse_function_definition(self) -> Optional[Dict]:
         """Парсит определение функции: func name(params) { body }"""
@@ -259,43 +323,53 @@ class Parser:
         return self._parse_call_expression()
 
     def _parse_call_expression(self) -> Optional[Dict]:
-        """Парсит вызов функции: name(args)"""
-        if self.pos >= len(self.tokens):
+        start_pos = self.pos
+        primary = self._parse_primary_expression()
+        if not primary:
             return None
 
-        if (self.tokens[self.pos].type == TokenType.ID and
-                self.pos + 1 < len(self.tokens) and
-                self.tokens[self.pos + 1].type == TokenType.LPAREN):
-
-            func_name = self.tokens[self.pos].value
-            call_token = self.tokens[self.pos]
-            self.pos += 2
-
-            args = []
-            while self.pos < len(self.tokens) and self.tokens[self.pos].type != TokenType.RPAREN:
-                expr = self._parse_expression()
-                if expr:
-                    args.append(expr)
-                elif self.tokens[self.pos].type == TokenType.COMMA:
+        if self.pos < len(self.tokens) and self.tokens[self.pos].type == TokenType.LPAREN:
+            if primary['type'] == 'variable':
+                func_name = primary['name']
+                self.pos += 1
+                args = []
+                while self.pos < len(self.tokens) and self.tokens[self.pos].type != TokenType.RPAREN:
+                    expr = self._parse_expression()
+                    if expr:
+                        args.append(expr)
+                    if self.pos < len(self.tokens) and self.tokens[self.pos].type == TokenType.COMMA:
+                        self.pos += 1
+                if self.pos < len(self.tokens) and self.tokens[self.pos].type == TokenType.RPAREN:
                     self.pos += 1
                 else:
-                    self.pos += 1
-
-            if self.pos < len(self.tokens) and self.tokens[self.pos].type == TokenType.RPAREN:
+                    self.error_occurred = True
+                    self.error_message = f"Ожидалась ')' после вызова функции {func_name}"
+                    return None
+                return {'type': 'function_call', 'name': func_name, 'args': args}
+            elif primary['type'] == 'module_access':
+                module_name = primary['module']
+                func_name = primary['member']
                 self.pos += 1
+                args = []
+                while self.pos < len(self.tokens) and self.tokens[self.pos].type != TokenType.RPAREN:
+                    expr = self._parse_expression()
+                    if expr:
+                        args.append(expr)
+                    if self.pos < len(self.tokens) and self.tokens[self.pos].type == TokenType.COMMA:
+                        self.pos += 1
+                if self.pos < len(self.tokens) and self.tokens[self.pos].type == TokenType.RPAREN:
+                    self.pos += 1
+                else:
+                    self.error_occurred = True
+                    self.error_message = f"Ожидалась ')' после вызова функции {module_name}.{func_name}"
+                    return None
+                return {'type': 'function_call', 'module': module_name, 'name': func_name, 'args': args}
             else:
                 self.error_occurred = True
-                self.error_message = f"Ожидалась ')' после вызова функции {func_name}"
+                self.error_message = "Невозможно вызвать данное выражение как функцию"
                 return None
-
-            return {
-                'type': 'function_call',
-                'name': func_name,
-                'args': args,
-                '_token': call_token
-            }
-
-        return self._parse_primary_expression()
+        else:
+            return primary
 
     def _parse_primary_expression(self) -> Optional[Dict]:
         if self.pos >= len(self.tokens):
@@ -326,10 +400,20 @@ class Parser:
             self.pos += 1
             return {'type': 'bool', 'value': False}
 
-        elif token.type == TokenType.ID:
+        if token.type == TokenType.ID:
             name = token.value
             self.pos += 1
-            return {'type': 'variable', 'name': name}
+            if self.pos < len(self.tokens) and self.tokens[self.pos].type == TokenType.DOT:
+                self.pos += 1
+                if self.pos >= len(self.tokens) or self.tokens[self.pos].type != TokenType.ID:
+                    self.error_occurred = True
+                    self.error_message = "Ожидается идентификатор после '.'"
+                    return None
+                member = self.tokens[self.pos].value
+                self.pos += 1
+                return {'type': 'module_access', 'module': name, 'member': member}
+            else:
+                return {'type': 'variable', 'name': name}
 
         elif token.type == TokenType.LPAREN:
             self.pos += 1

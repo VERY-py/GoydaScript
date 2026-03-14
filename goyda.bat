@@ -1,14 +1,13 @@
 @echo off
 chcp 65001 >nul
-
-setlocal
+setlocal enabledelayedexpansion
 
 if "%1"=="" (
     echo Ошибка: Имя скрипта не может быть пустым!
     goto :show_help
 )
 
-set SCRIPT_NAME=%1
+set "SCRIPT_NAME=%~1"
 shift
 
 set DEBUG_PARAM=
@@ -23,12 +22,12 @@ if "%1"=="--help" (
     goto :show_help
 )
 if "%1"=="-dsmall" (
-    set DEBUG_PARAM=-d small
+    set "DEBUG_PARAM=-d small"
     shift
     goto :parse_args
 )
 if "%1"=="-dfull" (
-    set DEBUG_PARAM=-d full
+    set "DEBUG_PARAM=-d full"
     shift
     goto :parse_args
 )
@@ -37,11 +36,21 @@ echo Неизвестная опция: %1
 goto :show_help
 
 :run
+echo Запуск: "%SCRIPT_NAME%"
+
 if defined DEBUG_PARAM (
-    python GoydaScript/gs2py.py %SCRIPT_NAME% %DEBUG_PARAM%
+    python "D:\Project2\GoydaLang\GoydaScript\gs2py.py" "%SCRIPT_NAME%" %DEBUG_PARAM%
 ) else (
-    python GoydaScript/gs2py.py %SCRIPT_NAME%
+    python "D:\Project2\GoydaLang\GoydaScript\gs2py.py" "%SCRIPT_NAME%"
 )
+
+if errorlevel 1 (
+    echo Ошибка выполнения скрипта!
+    pause
+    exit /b 1
+)
+
+pause
 goto :eof
 
 :show_help
@@ -56,4 +65,5 @@ echo Примеры:
 echo   goyda myscript.gs              # без отладки
 echo   goyda myscript.gs -dsmall       # малый режим отладки
 echo   goyda myscript.gs -dfull       # полный режим отладки
+pause
 goto :eof

@@ -67,6 +67,7 @@ class TokenType(Enum):
     TRY = "TRY"
     EXCEPT = "EXCEPT"
     AS = "AS"
+    IMPORT = "IMPORT"
 
 class Token:
     def __init__(self, type_: TokenType, value: str = ""):
